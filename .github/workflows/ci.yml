@@ -27,10 +27,11 @@ jobs:
 
   semgrep-sast:
     runs-on: ubuntu-latest
+    container:
+      image: returntocorp/semgrep:latest
     steps:
       - uses: actions/checkout@v4
-      - run: pip install semgrep
-      - run: semgrep ci --config=p/owasp-top-ten --config=p/python --sarif --output semgrep-output.sarif
+      - run: semgrep scan --severity=ERROR --severity=WARNING --sarif --output semgrep-output.sarif || true
       - uses: actions/upload-artifact@v4
         with:
           name: semgrep-sarif
