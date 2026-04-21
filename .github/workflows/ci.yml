@@ -1,69 +1,73 @@
-name: CI Pipeline
+name: CI
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  # Permitimos le ejecución manual del workflow
   workflow_dispatch:
 
-permissions:
-  security-events: write
-
 jobs:
-  bandit-sast:
+  bandit_scan:
+    name: Run Bandit Scan
     runs-on: ubuntu-latest
-    continue-on-error: true
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
-      # Acción oficial de Bandit que genera SARIF automáticamente
-      - name: Run Bandit
-        uses: advanced-security/bandit-sarif@v1
-        with:
-          path: .
-          recursive: true
-          severity: MEDIUM,HIGH   # Omite LOW
-          confidence: MEDIUM,HIGH # Omite LOW
-      - name: Upload Bandit SARIF artifact
+          python-version: 3.13
+
+      - name: Install Bandit
+        run: pip install bandit
+
+      - name: Run Bandit Scan
+        run: bandit -ll -ii -r . -f json -o bandit-report.json || true
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: bandit-sarif
-          path: results.sarif
+          name: bandit-findings
+          path: bandit-report.json
 
-  semgrep-sast:
+  build_image:
+    name: Build Image and Run Image Scan
     runs-on: ubuntu-latest
-    container:
-      image: returntocorp/semgrep:latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run Semgrep
-        run: semgrep scan --severity=ERROR --severity=WARNING --sarif --output semgrep-output.sarif || true
-      - uses: actions/upload-artifact@v4
-        with:
-          name: semgrep-sarif
-          path: semgrep-output.sarif
-      - uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: semgrep-output.sarif
 
-  docker-build-and-scan:
-    runs-on: ubuntu-latest
-    needs: [bandit-sast, semgrep-sast]
     steps:
-      - uses: actions/checkout@v4
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+    #  - name: Set up Docker
+    #    uses: docker-practice/actions-setup-docker@v1
+    #    with:
+    #      docker_version: "20.10.7"
+
+      - name: Build Docker Image
+        run: docker build -f Dockerfile -t myapp:latest .
+        # - name: Docker Scout Scan
+        # run: |
+        # curl -fsSL https://raw.githubusercontent.com/docker/scout-cli/main/install.sh -o install-scout.sh
+        # sh install-scout.sh
+        # echo ${{ secrets.REPO_PWD }} | docker login -u ${{ secrets.REPO_USER }} --password-stdin
+        # docker scout quickview
+        # docker scout cves
+
+      - name: Docker Scout Scan
+        uses: docker/scout-action@v1.11.0
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_TOKEN }}
-      - name: Build Docker image
-        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/pygoat:latest .
-      - name: Scan image with Docker Scout
-        uses: docker/scout-action@v1
+          dockerhub-user: ${{ secrets.REPO_USER }}
+          dockerhub-password: ${{ secrets.REPO_PWD }}
+          command: quickview,cves
+          only-severities: critical,high
+          sarif-file: scout-report.sarif
+        
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
         with:
-          command: quickview
-          image: ${{ secrets.DOCKER_USERNAME }}/pygoat:latest
+          name: docker-scout-findings
+          path: scout-report.sarif
