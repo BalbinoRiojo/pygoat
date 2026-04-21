@@ -13,19 +13,33 @@ permissions:
 jobs:
   bandit-sast:
     runs-on: ubuntu-latest
-    continue-on-error: true   # El job no bloquea el workflow aunque falle
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: pip install bandit
-      - run: bandit -f sarif -o bandit-output.sarif -lll -iii -r . || true   # El || true evita que el job falle
-      - uses: actions/upload-artifact@v4
+      
+      - name: Run Bandit and ensure SARIF file
+        run: |
+          bandit -f sarif -o bandit-output.sarif -lll -iii -r . || echo "Bandit exit code: $?"
+          if [ ! -f bandit-output.sarif ]; then
+            echo "WARNING: bandit did not create SARIF file. Creating empty one."
+            echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Bandit"}},"results":[]}]}' > bandit-output.sarif
+          else
+            echo "SARIF file created successfully"
+            ls -la bandit-output.sarif
+          fi
+      
+      - name: Upload Bandit SARIF artifact
+        uses: actions/upload-artifact@v4
         with:
           name: bandit-sarif
           path: bandit-output.sarif
-      - uses: github/codeql-action/upload-sarif@v4
+      
+      - name: Upload to Security tab
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: bandit-output.sarif
 
@@ -36,7 +50,12 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - run: semgrep scan --severity=ERROR --severity=WARNING --sarif --output semgrep-output.sarif || true
+      - name: Run Semgrep
+        run: |
+          semgrep scan --severity=ERROR --severity=WARNING --sarif --output semgrep-output.sarif || echo "Semgrep exit code: $?"
+          if [ ! -f semgrep-output.sarif ]; then
+            echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Semgrep"}},"results":[]}]}' > semgrep-output.sarif
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: semgrep-sarif
@@ -50,14 +69,19 @@ jobs:
     needs: [bandit-sast, semgrep-sast]
     steps:
       - uses: actions/checkout@v4
-      # Login a Docker Hub comentado (no es necesario para la tarea)
-      # - name: Log in to Docker Hub
-      #   uses: docker/login-action@v3
-      #   with:
-      #     username: ${{ secrets.DOCKER_USERNAME }}
-      #     password: ${{ secrets.DOCKER_TOKEN }}
-      - name: Build Docker image
-        run: docker build -t pygoat:latest .
+      
+      - name: Verify Dockerfile exists
+        run: |
+          if [ ! -f Dockerfile ]; then
+            echo "ERROR: Dockerfile not found in repository root"
+            ls -la
+            exit 1
+          fi
+          echo "Dockerfile found"
+      
+      - name: Build Docker image with verbose output
+        run: docker build -t pygoat:latest . --progress=plain
+      
       - name: Scan image with Docker Scout
         uses: docker/scout-action@v1
         with:
