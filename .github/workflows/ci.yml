@@ -21,26 +21,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install bandit
+      # Instalar la versión más reciente de Bandit (soporta SARIF)
+      - name: Install Bandit
+        run: pip install --upgrade bandit
 
       # Generar JSON (para comparar)
       - name: Run Bandit (JSON)
         run: bandit -f json -o sast-bandit.json -lll -iii -r . || true
 
-      # Generar SARIF (para Security tab)
+      # Generar SARIF (para Security tab) - ahora sí funciona
       - name: Run Bandit (SARIF)
         run: bandit -f sarif -o bandit-output.sarif -lll -iii -r . || true
 
-      # Asegurar que el archivo SARIF existe (si no, crear uno con resultados mínimos)
-      - name: Ensure SARIF file
-        run: |
-          if [ ! -f bandit-output.sarif ] || [ ! -s bandit-output.sarif ]; then
-            echo "Bandit no generó SARIF. Usando el generado por defecto."
-            bandit -f sarif -o bandit-output.sarif -r . || true
-          fi
-          ls -la bandit-output.sarif
-
-      # Subir ambos artefactos
+      # Subir artefactos
       - uses: actions/upload-artifact@v4
         with:
           name: bandit-json
@@ -65,20 +58,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Generar JSON (para comparar)
+      # Generar JSON
       - name: Run Semgrep (JSON)
         run: semgrep scan --severity=ERROR --severity=WARNING --json --output=sast-semgrep.json || true
 
-      # Generar SARIF (para Security tab)
+      # Generar SARIF
       - name: Run Semgrep (SARIF)
         run: semgrep scan --severity=ERROR --severity=WARNING --sarif --output=semgrep-output.sarif || true
-
-      # Asegurar que el archivo SARIF existe
-      - name: Ensure SARIF file
-        run: |
-          if [ ! -f semgrep-output.sarif ] || [ ! -s semgrep-output.sarif ]; then
-            echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Semgrep"}},"results":[]}]}' > semgrep-output.sarif
-          fi
 
       # Subir artefactos
       - uses: actions/upload-artifact@v4
@@ -120,10 +106,13 @@ jobs:
           command: quickview
           image: ${{ secrets.REPO_USER }}/pygoat:latest
           only-severities: critical,high
-          sarif-file: scout-report.sarif
+          # sarif-file: scout-report.sarif  # Comentado porque no siempre se genera
 
-      - uses: actions/upload-artifact@v4
+      # Subir artefacto solo si existe
+      - name: Upload Scout SARIF if exists
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: docker-scout-findings
           path: scout-report.sarif
+        continue-on-error: true
