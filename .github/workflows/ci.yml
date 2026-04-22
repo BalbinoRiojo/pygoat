@@ -12,8 +12,8 @@ permissions:
 
 jobs:
   # ======================= BANDIT SAST =======================
-  bandit_scan:
-    name: Bandit SAST (SARIF)
+   bandit_scan:
+    name: Bandit SAST (JSON + SARIF)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -22,16 +22,37 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install bandit
-      - name: Run Bandit and ensure SARIF
+      
+      # Generar JSON (para comparar)
+      - name: Run Bandit (JSON)
+        run: bandit -f json -o sast-bandit.json -lll -iii -r . || true
+      
+      # Generar SARIF (para Security tab)
+      - name: Run Bandit (SARIF)
+        run: bandit -f sarif -o bandit-output.sarif -lll -iii -r . || true
+      
+      # Asegurar que el archivo SARIF existe (si no, crear uno con resultados mínimos)
+      - name: Ensure SARIF file
         run: |
-          bandit -f sarif -o bandit-output.sarif -lll -iii -r . || true
-          if [ ! -f bandit-output.sarif ]; then
-            echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Bandit"}},"results":[]}]}' > bandit-output.sarif
+          if [ ! -f bandit-output.sarif ] || [ ! -s bandit-output.sarif ]; then
+            echo "Bandit no generó SARIF. Usando el generado por defecto."
+            # Ejecutar bandit sin filtrar para generar SARIF
+            bandit -f sarif -o bandit-output.sarif -r . || true
           fi
+          # Verificar tamaño
+          ls -la bandit-output.sarif
+      
+      # Subir ambos artefactos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bandit-json
+          path: sast-bandit.json
       - uses: actions/upload-artifact@v4
         with:
           name: bandit-sarif
           path: bandit-output.sarif
+      
+      # Subir a Security tab
       - uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: bandit-output.sarif
