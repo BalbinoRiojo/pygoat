@@ -39,6 +39,7 @@ jobs:
         run: bandit -f json -o sast-bandit.json -lll -iii -r . || true
 
       # Convierte el JSON a SARIF usando un script Python (por si Bandit no soporta SARIF directamente)
+      # Incluye la severidad en el mensaje: [HIGH], [MEDIUM], etc.
       - name: Convertir JSON a SARIF
         run: |
           python -c "
@@ -51,7 +52,7 @@ jobs:
                   level = 'error' if r.get('issue_severity') == 'HIGH' else ('warning' if r.get('issue_severity') == 'MEDIUM' else 'note')
                   sarif['runs'][0]['results'].append({
                       'ruleId': r.get('test_name', 'unknown'),
-                      'message': {'text': r.get('issue_text', '')},
+                      'message': {'text': f\"[{r.get('issue_severity', 'MEDIUM')}] {r.get('issue_text', '')}\"},
                       'locations': [{'physicalLocation': {'artifactLocation': {'uri': r.get('filename', '')}, 'region': {'startLine': r.get('line_number', 1)}}}],
                       'level': level
                   })
