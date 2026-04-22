@@ -23,60 +23,31 @@ jobs:
           python-version: '3.11'
       - run: pip install bandit
 
-      # Generar JSON (con o sin filtros)
+      # Generar JSON
       - name: Run Bandit (JSON)
         run: bandit -f json -o sast-bandit.json -lll -iii -r . || true
 
-      # Crear SARIF a partir del JSON usando un script Python
+      # Convertir JSON a SARIF con Python (en una línea para evitar errores YAML)
       - name: Convert JSON to SARIF
         run: |
           python -c "
-import json, sys, os
-
-# Leer el JSON si existe, si no, crear estructura vacía
-json_file = 'sast-bandit.json'
-if os.path.exists(json_file) and os.path.getsize(json_file) > 0:
-    with open(json_file) as f:
-        data = json.load(f)
-    results = data.get('results', [])
-else:
-    results = []
-
-# Construir SARIF
-sarif = {
-    'version': '2.1.0',
-    'runs': [{
-        'tool': {'driver': {'name': 'Bandit', 'informationUri': 'https://github.com/PyCQA/bandit'}},
-        'results': []
-    }]
-}
-
-for r in results:
-    # Mapear severidad
-    severity = r.get('issue_severity', 'MEDIUM')
-    if severity == 'HIGH':
-        level = 'error'
-    elif severity == 'MEDIUM':
-        level = 'warning'
-    else:
-        level = 'note'
-    
-    sarif['runs'][0]['results'].append({
-        'ruleId': r.get('test_name', 'unknown'),
-        'message': {'text': r.get('issue_text', '')},
-        'locations': [{
-            'physicalLocation': {
-                'artifactLocation': {'uri': r.get('filename', '')},
-                'region': {'startLine': r.get('line_number', 1)}
-            }
-        }],
-        'level': level
-    })
-
-with open('bandit-output.sarif', 'w') as f:
-    json.dump(sarif, f, indent=2)
-print(f'Created bandit-output.sarif with {len(results)} results')
-"
+          import json, os
+          sarif = {'version': '2.1.0', 'runs': [{'tool': {'driver': {'name': 'Bandit'}}, 'results': []}]}
+          if os.path.exists('sast-bandit.json') and os.path.getsize('sast-bandit.json') > 0:
+              with open('sast-bandit.json') as f:
+                  data = json.load(f)
+              for r in data.get('results', []):
+                  level = 'error' if r.get('issue_severity') == 'HIGH' else ('warning' if r.get('issue_severity') == 'MEDIUM' else 'note')
+                  sarif['runs'][0]['results'].append({
+                      'ruleId': r.get('test_name', 'unknown'),
+                      'message': {'text': r.get('issue_text', '')},
+                      'locations': [{'physicalLocation': {'artifactLocation': {'uri': r.get('filename', '')}, 'region': {'startLine': r.get('line_number', 1)}}}],
+                      'level': level
+                  })
+          with open('bandit-output.sarif', 'w') as f:
+              json.dump(sarif, f, indent=2)
+          print(f'Created bandit-output.sarif with {len(sarif[\"runs\"][0][\"results\"])} results')
+          "
 
       # Subir artefactos
       - uses: actions/upload-artifact@v4
