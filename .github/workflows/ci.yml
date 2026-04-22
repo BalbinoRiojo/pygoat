@@ -21,17 +21,41 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      # Instalar la versión más reciente de Bandit (soporta SARIF)
-      - name: Install Bandit
-        run: pip install --upgrade bandit
+      # Instalar Bandit desde GitHub (última versión con soporte SARIF)
+      - name: Install Bandit from source
+        run: pip install git+https://github.com/PyCQA/bandit.git
 
-      # Generar JSON (para comparar)
+      # Generar JSON
       - name: Run Bandit (JSON)
         run: bandit -f json -o sast-bandit.json -lll -iii -r . || true
 
-      # Generar SARIF (para Security tab) - ahora sí funciona
+      # Generar SARIF (intentar con la versión instalada)
       - name: Run Bandit (SARIF)
-        run: bandit -f sarif -o bandit-output.sarif -lll -iii -r . || true
+        id: bandit_sarif
+        run: |
+          bandit -f sarif -o bandit-output.sarif -lll -iii -r . || true
+          if [ ! -f bandit-output.sarif ]; then
+            echo "Bandit SARIF generation failed. Creating from JSON."
+            # Instalar jq para procesar JSON
+            sudo apt-get update && sudo apt-get install -y jq
+            # Crear un SARIF básico a partir del JSON (estructura mínima)
+            jq -n --slurpfile results sast-bandit.json '{
+              version: "2.1.0",
+              runs: [
+                {
+                  tool: { driver: { name: "Bandit" } },
+                  results: ($results[] | .results[]? // []) | map({
+                    ruleId: .test_name,
+                    message: { text: .issue_text },
+                    locations: [{ physicalLocation: { artifactLocation: { uri: .filename }, region: { startLine: .line_number } } }],
+                    severity: if .issue_severity == "HIGH" then "error" elif .issue_severity == "MEDIUM" then "warning" else "note" end
+                  })
+                }
+              ]
+            }' > bandit-output.sarif
+          fi
+          # Mostrar tamaño para depuración
+          ls -la bandit-output.sarif
 
       # Subir artefactos
       - uses: actions/upload-artifact@v4
@@ -48,7 +72,7 @@ jobs:
         with:
           sarif_file: bandit-output.sarif
 
-  # ======================= SEMGREP SAST (en paralelo) =======================
+  # ======================= SEMGREP SAST =======================
   semgrep_scan:
     name: Semgrep SAST (JSON + SARIF)
     runs-on: ubuntu-latest
@@ -57,16 +81,10 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-
-      # Generar JSON
       - name: Run Semgrep (JSON)
         run: semgrep scan --severity=ERROR --severity=WARNING --json --output=sast-semgrep.json || true
-
-      # Generar SARIF
       - name: Run Semgrep (SARIF)
         run: semgrep scan --severity=ERROR --severity=WARNING --sarif --output=semgrep-output.sarif || true
-
-      # Subir artefactos
       - uses: actions/upload-artifact@v4
         with:
           name: semgrep-json
@@ -75,8 +93,6 @@ jobs:
         with:
           name: semgrep-sarif
           path: semgrep-output.sarif
-
-      # Subir a Security tab
       - uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep-output.sarif
@@ -88,16 +104,13 @@ jobs:
     needs: [bandit_scan, semgrep_scan]
     steps:
       - uses: actions/checkout@v4
-
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.REPO_USER }}
           password: ${{ secrets.REPO_PWD }}
-
       - name: Build Docker Image
         run: docker build -t ${{ secrets.REPO_USER }}/pygoat:latest .
-
       - name: Docker Scout Scan
         uses: docker/scout-action@v1
         with:
@@ -106,13 +119,3 @@ jobs:
           command: quickview
           image: ${{ secrets.REPO_USER }}/pygoat:latest
           only-severities: critical,high
-          # sarif-file: scout-report.sarif  # Comentado porque no siempre se genera
-
-      # Subir artefacto solo si existe
-      - name: Upload Scout SARIF if exists
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: docker-scout-findings
-          path: scout-report.sarif
-        continue-on-error: true
