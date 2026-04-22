@@ -1,5 +1,6 @@
 name: CI Pipeline
 
+# Se ejecuta al hacer push o pull request sobre la rama master, o manualmente
 on:
   push:
     branches: [ master ]
@@ -7,28 +8,38 @@ on:
     branches: [ master ]
   workflow_dispatch:
 
+# Permiso necesario para subir los resultados SARIF a la pestaña Security
 permissions:
   security-events: write
 
 jobs:
-  # ======================= BANDIT SAST =======================
+  # ------------------------------------------------------------------
+  # Job 1: Análisis SAST con Bandit
+  # Genera un archivo JSON (para comparar) y un SARIF (para Security)
+  # ------------------------------------------------------------------
   bandit_scan:
     name: Bandit SAST (JSON + SARIF)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    continue-on-error: true   # No detiene el pipeline aunque Bandit encuentre vulnerabilidades
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Clonar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install bandit
 
-      # Generar JSON
-      - name: Run Bandit (JSON)
+      - name: Instalar Bandit
+        run: pip install bandit
+
+      # Genera el JSON con filtros: omite severidad baja y confianza baja
+      - name: Ejecutar Bandit (formato JSON)
         run: bandit -f json -o sast-bandit.json -lll -iii -r . || true
 
-      # Convertir JSON a SARIF con Python (en una línea para evitar errores YAML)
-      - name: Convert JSON to SARIF
+      # Convierte el JSON a SARIF usando un script Python (por si Bandit no soporta SARIF directamente)
+      - name: Convertir JSON a SARIF
         run: |
           python -c "
           import json, os
@@ -46,64 +57,92 @@ jobs:
                   })
           with open('bandit-output.sarif', 'w') as f:
               json.dump(sarif, f, indent=2)
-          print(f'Created bandit-output.sarif with {len(sarif[\"runs\"][0][\"results\"])} results')
+          print(f'Creado bandit-output.sarif con {len(sarif[\"runs\"][0][\"results\"])} resultados')
           "
 
-      # Subir artefactos
-      - uses: actions/upload-artifact@v4
+      # Subir el JSON como artefacto descargable
+      - name: Subir artefacto JSON de Bandit
+        uses: actions/upload-artifact@v4
         with:
           name: bandit-json
           path: sast-bandit.json
-      - uses: actions/upload-artifact@v4
+
+      # Subir el SARIF como artefacto descargable
+      - name: Subir artefacto SARIF de Bandit
+        uses: actions/upload-artifact@v4
         with:
           name: bandit-sarif
           path: bandit-output.sarif
 
-      # Subir a Security tab
-      - uses: github/codeql-action/upload-sarif@v4
+      # Subir el SARIF a la pestaña Security de GitHub
+      - name: Subir resultados a la pestaña Security
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: bandit-output.sarif
 
-  # ======================= SEMGREP SAST =======================
+  # ------------------------------------------------------------------
+  # Job 2: Análisis SAST con Semgrep (se ejecuta en paralelo con Bandit)
+  # También genera JSON y SARIF, omitiendo vulnerabilidades de severidad baja
+  # ------------------------------------------------------------------
   semgrep_scan:
     name: Semgrep SAST (JSON + SARIF)
     runs-on: ubuntu-latest
     container:
-      image: returntocorp/semgrep:latest
+      image: returntocorp/semgrep:latest   # Usa la imagen oficial de Semgrep
     continue-on-error: true
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Run Semgrep (JSON)
+      - name: Clonar el repositorio
+        uses: actions/checkout@v4
+
+      # Escaneo en JSON con severidades ERROR y WARNING (crítico, alto, medio)
+      - name: Ejecutar Semgrep (formato JSON)
         run: semgrep scan --severity=ERROR --severity=WARNING --json --output=sast-semgrep.json || true
-      - name: Run Semgrep (SARIF)
+
+      # Escaneo en SARIF (para Security)
+      - name: Ejecutar Semgrep (formato SARIF)
         run: semgrep scan --severity=ERROR --severity=WARNING --sarif --output=semgrep-output.sarif || true
-      - uses: actions/upload-artifact@v4
+
+      - name: Subir artefacto JSON de Semgrep
+        uses: actions/upload-artifact@v4
         with:
           name: semgrep-json
           path: sast-semgrep.json
-      - uses: actions/upload-artifact@v4
+
+      - name: Subir artefacto SARIF de Semgrep
+        uses: actions/upload-artifact@v4
         with:
           name: semgrep-sarif
           path: semgrep-output.sarif
-      - uses: github/codeql-action/upload-sarif@v4
+
+      - name: Subir resultados a la pestaña Security
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep-output.sarif
 
-  # ======================= DOCKER BUILD + SCOUT =======================
+  # ------------------------------------------------------------------
+  # Job 3: Construcción de la imagen Docker y análisis con Docker Scout
+  # Depende de que los dos análisis SAST hayan finalizado
+  # ------------------------------------------------------------------
   build_image:
     name: Build and Scan Docker Image
     runs-on: ubuntu-latest
-    needs: [bandit_scan, semgrep_scan]
+    needs: [bandit_scan, semgrep_scan]   # Espera a que terminen ambos
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Log in to Docker Hub
+      - name: Clonar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Iniciar sesión en Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.REPO_USER }}
           password: ${{ secrets.REPO_PWD }}
-      - name: Build Docker Image
+
+      - name: Construir la imagen Docker
         run: docker build -t ${{ secrets.REPO_USER }}/pygoat:latest .
-      - name: Docker Scout Scan
+
+      - name: Escanear la imagen con Docker Scout (solo vulnerabilidades críticas y altas)
         uses: docker/scout-action@v1
         with:
           dockerhub-user: ${{ secrets.REPO_USER }}
