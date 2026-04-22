@@ -21,41 +21,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      # Instalar Bandit desde GitHub (última versión con soporte SARIF)
-      - name: Install Bandit from source
-        run: pip install git+https://github.com/PyCQA/bandit.git
+      # Instalar Bandit 1.7.5 (soporte SARIF asegurado)
+      - name: Install Bandit
+        run: pip install bandit==1.7.5
 
-      # Generar JSON
+      # Generar JSON con filtros (para comparar)
       - name: Run Bandit (JSON)
         run: bandit -f json -o sast-bandit.json -lll -iii -r . || true
 
-      # Generar SARIF (intentar con la versión instalada)
+      # Generar SARIF sin filtros (para garantizar archivo y subida a Security)
       - name: Run Bandit (SARIF)
-        id: bandit_sarif
-        run: |
-          bandit -f sarif -o bandit-output.sarif -lll -iii -r . || true
-          if [ ! -f bandit-output.sarif ]; then
-            echo "Bandit SARIF generation failed. Creating from JSON."
-            # Instalar jq para procesar JSON
-            sudo apt-get update && sudo apt-get install -y jq
-            # Crear un SARIF básico a partir del JSON (estructura mínima)
-            jq -n --slurpfile results sast-bandit.json '{
-              version: "2.1.0",
-              runs: [
-                {
-                  tool: { driver: { name: "Bandit" } },
-                  results: ($results[] | .results[]? // []) | map({
-                    ruleId: .test_name,
-                    message: { text: .issue_text },
-                    locations: [{ physicalLocation: { artifactLocation: { uri: .filename }, region: { startLine: .line_number } } }],
-                    severity: if .issue_severity == "HIGH" then "error" elif .issue_severity == "MEDIUM" then "warning" else "note" end
-                  })
-                }
-              ]
-            }' > bandit-output.sarif
-          fi
-          # Mostrar tamaño para depuración
-          ls -la bandit-output.sarif
+        run: bandit -f sarif -o bandit-output.sarif -r . || true
 
       # Subir artefactos
       - uses: actions/upload-artifact@v4
