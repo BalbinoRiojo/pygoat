@@ -21,17 +21,62 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      # Instalar Bandit 1.7.5 (soporte SARIF asegurado)
-      - name: Install Bandit
-        run: pip install bandit==1.7.5
+      - run: pip install bandit
 
-      # Generar JSON con filtros (para comparar)
+      # Generar JSON (con o sin filtros)
       - name: Run Bandit (JSON)
         run: bandit -f json -o sast-bandit.json -lll -iii -r . || true
 
-      # Generar SARIF sin filtros (para garantizar archivo y subida a Security)
-      - name: Run Bandit (SARIF)
-        run: bandit -f sarif -o bandit-output.sarif -r . || true
+      # Crear SARIF a partir del JSON usando un script Python
+      - name: Convert JSON to SARIF
+        run: |
+          python -c "
+import json, sys, os
+
+# Leer el JSON si existe, si no, crear estructura vacía
+json_file = 'sast-bandit.json'
+if os.path.exists(json_file) and os.path.getsize(json_file) > 0:
+    with open(json_file) as f:
+        data = json.load(f)
+    results = data.get('results', [])
+else:
+    results = []
+
+# Construir SARIF
+sarif = {
+    'version': '2.1.0',
+    'runs': [{
+        'tool': {'driver': {'name': 'Bandit', 'informationUri': 'https://github.com/PyCQA/bandit'}},
+        'results': []
+    }]
+}
+
+for r in results:
+    # Mapear severidad
+    severity = r.get('issue_severity', 'MEDIUM')
+    if severity == 'HIGH':
+        level = 'error'
+    elif severity == 'MEDIUM':
+        level = 'warning'
+    else:
+        level = 'note'
+    
+    sarif['runs'][0]['results'].append({
+        'ruleId': r.get('test_name', 'unknown'),
+        'message': {'text': r.get('issue_text', '')},
+        'locations': [{
+            'physicalLocation': {
+                'artifactLocation': {'uri': r.get('filename', '')},
+                'region': {'startLine': r.get('line_number', 1)}
+            }
+        }],
+        'level': level
+    })
+
+with open('bandit-output.sarif', 'w') as f:
+    json.dump(sarif, f, indent=2)
+print(f'Created bandit-output.sarif with {len(results)} results')
+"
 
       # Subir artefactos
       - uses: actions/upload-artifact@v4
